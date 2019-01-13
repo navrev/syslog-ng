@@ -21,18 +21,21 @@
 #
 #############################################################################
 
-from src.syslog_ng_ctl.syslog_ng_ctl_cli import SyslogNgCtlCli
-
+from src.syslog_ng_ctl.syslog_ng_ctl_executor import SyslogNgCtlExecutor
 
 class SyslogNgCtl(object):
     def __init__(self, logger_factory, instance_paths):
-        self.__syslog_ng_ctl_cli = SyslogNgCtlCli(logger_factory, instance_paths)
+        self.__syslog_ng_ctl_executor = SyslogNgCtlExecutor(logger_factory, instance_paths)
 
     def reload(self):
-        return self.__syslog_ng_ctl_cli.reload()
+        return self.__syslog_ng_ctl_executor.run_command(command_short_name="reload", command=["reload"])
 
     def stop(self):
-        return self.__syslog_ng_ctl_cli.stop()
+        return self.__syslog_ng_ctl_executor.run_command(command_short_name="stop", command=["stop"])
+
+    def stats(self, reset):
+        ctl_stats_command = self.__syslog_ng_ctl_executor.construct_ctl_stats_command(reset=reset)
+        return self.__syslog_ng_ctl_executor.run_command(command_short_name="stats", command=ctl_stats_command)
 
     def is_control_socket_alive(self):
-        return self.__syslog_ng_ctl_cli.is_control_socket_alive()
+        return self.stats(reset=False)["exit_code"] == 0
