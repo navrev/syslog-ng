@@ -245,7 +245,7 @@ _setup_bind_addr(AFInetDestDriver *self)
   g_sockaddr_unref(self->super.bind_addr);
   self->super.bind_addr = NULL;
 
-  if (!resolve_hostname_to_sockaddr(&self->super.bind_addr, self->super.transport_mapper->address_family, self->bind_ip))
+  if (!resolve_hostname_to_sockaddr_v1(&self->super.bind_addr, self->super.transport_mapper->address_family, self->bind_ip, self->addr_resolv))
     return FALSE;
 
   if (self->bind_port)
@@ -260,8 +260,8 @@ _setup_dest_addr(AFInetDestDriver *self)
   g_sockaddr_unref(self->super.dest_addr);
   self->super.dest_addr = NULL;
 
-  if (!resolve_hostname_to_sockaddr(&self->super.dest_addr, self->super.transport_mapper->address_family,
-                                    _afinet_dd_get_hostname(self)))
+  if (!resolve_hostname_to_sockaddr_v1(&self->super.dest_addr, self->super.transport_mapper->address_family,
+                                    _afinet_dd_get_hostname(self), self->addr_resolv))
     return FALSE;
 
   if (!self->dest_port)

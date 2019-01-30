@@ -139,14 +139,15 @@ resolve_hostname_to_sockaddr_using_getaddrinfo(GSockAddr **addr, gint family, co
 {
   struct addrinfo hints;
   struct addrinfo *res;
+  int ret = 0;
 
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = family;
   hints.ai_socktype = 0;
   hints.ai_protocol = 0;
   hints.ai_flags = AI_V4MAPPED | AI_ADDRCONFIG;
-
-  if (getaddrinfo(name, NULL, &hints, &res) == 0)
+  ret = getaddrinfo(name, NULL, &hints, &res);
+  if (ret == 0)
     {
       /* we only use the first entry in the returned list */
       switch (family)
@@ -165,8 +166,197 @@ resolve_hostname_to_sockaddr_using_getaddrinfo(GSockAddr **addr, gint family, co
         }
       freeaddrinfo(res);
       return TRUE;
+    } 
+#ifdef SYSLOG_NG_ENABLE_DNS_ASYNC
+  else if (ret == EAI_AGAIN) {
+        /*
+         * Even if a single resolution returns EAI_AGAIN go async.,
+         * see code below for more details
+        */
+
+        resolution_go_async = TRUE;
+        msg_info("Async address resolution using getaddrinfo() : ON");
     }
+#endif
   return FALSE;
+}
+
+#ifdef SYSLOG_NG_ENABLE_DNS_ASYNC
+
+void
+dns_addr_resolv_work(void *s)
+{
+  AddrResolver *resolv = (AddrResolver *)s;
+  gboolean ret = resolve_hostname_to_sockaddr_using_getaddrinfo(&resolv->addr,
+                                                                resolv->family,
+                                                                resolv->hostname)
+  free(resolv->hostname);
+  resolv->hostname = NULL;
+  __dns_asyn_transition_state(resolv, (ret ? 1 : -1));
+}
+
+void
+dns_addr_resolv_finished(void *s)
+{
+  AddrResolver *resolv = (AddrResolver *)s;
+}
+
+void
+dns_resolver_init(AddrResolver **self)
+{
+  *self = g_slice_new0(AddrResolver);
+  AddrResolver *s = *self;
+  main_loop_io_worker_job_init(&s->dns_job);
+  s->dns_job.user_data = s;
+  s->dns_job.work = (void (*)(void *)) dns_addr_resolv_work;
+  s->dns_job.completion = (void (*)(void *)) dns_addr_resolv_finished;
+}
+
+void
+dns_resolver_deinit(AddrResolver **self)
+{
+  if ((*resolv)->hostname) {
+    free(resolv->hostname);
+    resolv->hostname = NULL;
+  }
+  g_slice_free1(sizeof(AddrResolver), *self);
+  *self = NULL;
+}
+
+gboolean
+resolve_hostname_to_sockaddr_using_getaddrinfo_async(GSockAddr **addr, gint family, const gchar *name, AddrResolver *resolv)
+{
+  gboolean ret = FALSE;
+
+  /*
+   * First, attempt to resolve the address syncronously. If that
+   * fails, try async resolution.
+   *
+   * It has been observed that when dns is not reachable even if the first
+   * dns resolution is done syncronously, there will significant dealy until
+   * all resolutions go async. resolution_go_async will be set to true the
+   * moment some resolution returns EAI_AGAIN. This is an optimization for
+   * failure cases. It will be turned back on the moment there is a successful
+   * resolution.
+   *
+   * resolv == NULL indicates always resolve syncronously.
+   */
+  /*              State transitions
+   *
+   *                   {start}
+   *                     |
+   *                     |
+   *   (resolve == NULL) ---------
+   *    |                        |
+   *    |                        |
+   *  <false>                 <true>
+   *    |                        |
+   *  (resolution_go_async)      |
+   *    |            |           |
+   *    |            |           |
+   * <true>       <fasle>        |
+   *    |            |<----------
+   *    |            v
+   *    |       [ADDR_SYNC]  ---{first attempt succesful}--->  [Done]
+   *    |          ^       |
+   *    |          |       |
+   *    |          |  {failure}
+   *    |        <yes>     |
+   *    |          |       |
+   *    |         (resolve == NULL)
+   *    |                  |
+   *    |                 <no>
+   *    |                  |
+   *    |                  v
+   *     ----->[ADDR_GO_ASYNC]  <--------------------------|
+   *                 |                                     |
+   *           {submit work}                        [ADDR_FAILURE]
+   *                 |                                     ^
+   *                 v                                     |
+   *          [ADDR_INPROGRESS] ----{unable to resolve}----|
+   *                 |
+   *                 v
+   *            [ADDR_SUCCESS] ----> [Done]
+   *
+   */
+
+  if (resolv != NULL && resolution_go_async && resolv->state == ADDR_SYNC) {
+          resolv->state = ADDR_GO_ASYNC;
+  }
+
+  if (resolv == NULL || resolv->state == ADDR_SYNC) {
+    ret = resolve_hostname_to_sockaddr_using_getaddrinfo(addr, family, name);
+    if (ret || resolv == NULL) {
+      return ret;
+    } else {
+      resolv->state = ADDR_GO_ASYNC;
+    }
+  }
+
+  ret = __dns_asyn_transition_state(resolv, 0);
+
+  return ret;
+}
+
+/*
+ * value == 0 -> still in progress
+ * value == 1 -> getaddrinfo() returned success
+ * value == -1 -> getaddrinfo() returned failure
+ */
+
+gboolean
+__dns_async_transition_state(AddrResolver *resolv, int value)
+{
+  int ret = FALSE;
+  switch (resolv->state)
+    {
+      case ADDR_INPROGRESS:
+        if (value == 1) {
+          resolv->state = ADDR_SUCCESS;
+        } else if (value == -1) {
+          resolv->state = ADDR_FAILURE;
+        }
+        break;
+      case ADDR_GO_ASYNC:
+        if (main_loop_worker_job_quit()) {
+          return ret;
+        }
+        resolv->hostname = strdup(name);
+        resolv->family = family;
+        resolv->state = ADDR_INPROGRESS;
+        g_atomic_counter_set(&resolv->ret, 0);
+        main_loop_io_worker_job_submit(&resolv->dns_job);
+        msg_info("Async address resolution for ", evt_tag_str("host", name));
+        break;
+      case ADDR_SUCCESS:
+        resolv->state = ADDR_SYNC;
+        *addr = resolv->addr;
+        ret = TRUE;
+        resolution_go_async = FALSE;
+        msg_info("Successfully resolved async address resolution for "
+                 evt_tag_str("host", name));
+        break;
+      case ADDR_FAILURE:
+        resolv->state = ADDR_GO_ASYNC;
+        g_atomic_counter_set(&resolv->ret, 0);
+        break;
+      case ADDR_SYNC:
+      default:
+      g_assert_not_reached();
+    }
+  return ret;
+}
+
+#endif
+
+gboolean
+resolve_hostname_to_sockaddr_using_getaddrinfo_v1(GSockAddr **addr, gint family, const gchar *name, AddrResolver *resolv)
+{
+#ifdef SYSLOG_NG_ENABLE_DNS_ASYNC
+  return resolve_hostname_to_sockaddr_using_getaddrinfo_async(addr, family, name, resolv);
+#else
+  return resolve_hostname_to_sockaddr_using_getaddrinfo(addr, family, name);
+#endif
 }
 
 #else
@@ -203,7 +393,7 @@ resolve_hostname_to_sockaddr_using_gethostbyname(GSockAddr **addr, gint family, 
 #endif
 
 gboolean
-resolve_hostname_to_sockaddr(GSockAddr **addr, gint family, const gchar *name)
+resolve_hostname_to_sockaddr_async(GSockAddr **addr, gint family, const gchar *name, AddrResolver *resolv)
 {
   gboolean result;
 
@@ -211,7 +401,7 @@ resolve_hostname_to_sockaddr(GSockAddr **addr, gint family, const gchar *name)
     return resolve_wildcard_hostname_to_sockaddr(addr, family, name);
 
 #ifdef SYSLOG_NG_HAVE_GETADDRINFO
-  result = resolve_hostname_to_sockaddr_using_getaddrinfo(addr, family, name);
+  result = resolve_hostname_to_sockaddr_using_getaddrinfo_v1(addr, family, name);
 #else
   result = resolve_hostname_to_sockaddr_using_gethostbyname(addr, family, name);
 #endif
@@ -221,6 +411,22 @@ resolve_hostname_to_sockaddr(GSockAddr **addr, gint family, const gchar *name)
                 evt_tag_str("host", name));
     }
   return result;
+}
+
+gboolean
+resolve_hostname_to_sockaddr_v1(GSockAddr **addr, gint family, const gchar *name, AddrResolver *resolv)
+{
+#ifdef SYSLOG_NG_ENABLE_DNS_ASYNC
+  return resolve_hostname_to_sockaddr_async(addr, family, name, resolv);
+#else
+  return resolve_hostname_to_sockaddr(addr, family, name);
+#endif
+}
+
+gboolean
+resolve_hostname_to_sockaddr(GSockAddr **addr, gint family, const gchar *name)
+{
+  return resolve_hostname_to_sockaddr_async(addr, family, name, NULL);
 }
 
 /****************************************************************************

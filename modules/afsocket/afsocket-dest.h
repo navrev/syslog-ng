@@ -29,6 +29,8 @@
 #include "transport-mapper.h"
 #include "driver.h"
 #include "logwriter.h"
+#include "host-resolve.h"
+
 
 #include <iv.h>
 
@@ -46,6 +48,7 @@ struct _AFSocketDestDriver
   LogWriterOptions writer_options;
   LogProtoClientFactory *proto_factory;
 
+  AddrResolver *addr_resolv;
   GSockAddr *bind_addr;
   GSockAddr *dest_addr;
   gint time_reopen;

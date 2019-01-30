@@ -25,6 +25,8 @@
 
 #include "syslog-ng.h"
 #include "gsockaddr.h"
+#include "mainloop-io-worker.h"
+#include "mainloop-worker.h"
 
 typedef struct _HostResolveOptions
 {
@@ -34,9 +36,34 @@ typedef struct _HostResolveOptions
   gboolean normalize_hostnames;
 } HostResolveOptions;
 
+
+typedef enum {
+  ADDR_SYNC = 0,
+  ADDR_GO_ASYNC,
+  ADDR_INPROGRESS,
+  ADDR_SUCCESS,
+  ADDR_FAILURE
+} AddrResolverState;
+
+typedef struct _AddrResolver
+{
+  GAtomicCounter      ret;
+  gchar               *hostname;
+  GSockAddr           *addr;
+  gint                family;
+  AddrResolverState   state;
+  MainLoopIOWorkerJob dns_job;
+} AddrResolver;
+
+#ifdef SYSLOG_NG_ENABLE_DNS_ASYNC
+void dns_resolver_init(AddrResolver **self);
+void dns_resolver_deinit(AddrResolver **self);
+#endif
+
 /* name resolution */
 const gchar *resolve_sockaddr_to_hostname(gsize *result_len, GSockAddr *saddr,
                                           const HostResolveOptions *host_resolve_options);
+gboolean resolve_hostname_to_sockaddr_v1(GSockAddr **addr, gint family, const gchar *name, AddrResolver *resolv);
 gboolean resolve_hostname_to_sockaddr(GSockAddr **addr, gint family, const gchar *name);
 const gchar *resolve_hostname_to_hostname(gsize *result_len, const gchar *hostname, HostResolveOptions *options);
 

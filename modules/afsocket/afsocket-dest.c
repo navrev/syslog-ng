@@ -27,6 +27,7 @@
 #include "gsocket.h"
 #include "stats/stats-registry.h"
 #include "mainloop.h"
+#include "host-resolve.h"
 
 #include <string.h>
 #include <sys/types.h>
@@ -579,6 +580,10 @@ afsocket_dd_init(LogPipe *s)
 {
   AFSocketDestDriver *self = (AFSocketDestDriver *) s;
 
+#ifdef SYSLOG_NG_ENABLE_DNS_ASYNC
+  dns_resolver_init(&self->addr_resolv);
+#endif
+
   if (!log_dest_driver_init_method(s) ||
       !afsocket_dd_setup_transport(self))
     {
@@ -620,6 +625,8 @@ gboolean
 afsocket_dd_deinit(LogPipe *s)
 {
   AFSocketDestDriver *self = (AFSocketDestDriver *) s;
+  gboolean ret;
+
 
   afsocket_dd_stop_watches(self);
   afsocket_dd_stop_writer(self);
@@ -628,8 +635,12 @@ afsocket_dd_deinit(LogPipe *s)
     {
       afsocket_dd_save_connection(self);
     }
+  ret = log_dest_driver_deinit_method(s);
 
-  return log_dest_driver_deinit_method(s);
+#ifdef SYSLOG_NG_ENABLE_DNS_ASYNC
+  dns_resolver_deinit(&self->addr_resolv);
+#endif
+  return ret;
 }
 
 static void

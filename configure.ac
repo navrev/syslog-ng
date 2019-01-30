@@ -327,6 +327,8 @@ AC_ARG_WITH(docbook,
             [ XSL_STYLESHEET=http://docbook.sourceforge.net/release/xsl/current/manpages/docbook.xsl ]
             )
 
+AC_ARG_ENABLE(dns-async, [  --enable-dns-async    Enable support for asyncronous dns address resolution.],,enable_dns_async="no")
+
 AC_ARG_ENABLE(manpages, AC_HELP_STRING([ --enable-manpages], [ Enable generation of manpages (default: no)]), , [enable_manpages="no"; XSL_STYLESHEET=""])
 
 AC_ARG_ENABLE(java, [ --enable-java  Enable java destination (default: auto)],, enable_java="auto")
@@ -1740,6 +1742,7 @@ AM_CONDITIONAL(ENABLE_JOURNALD, [test "$with_systemd_journal" != "no"])
 AM_CONDITIONAL(ENABLE_PYTHON, [test "$enable_python" != "no"])
 AM_CONDITIONAL(ENABLE_JAVA, [test "$enable_java" = "yes"])
 AM_CONDITIONAL(ENABLE_JAVA_MODULES, [test "$enable_java_modules" = "yes"])
+AM_CONDITIONAL(ENABLE_DNS_ASYNC, [test "$enable_dns_async" != "no"])
 AM_CONDITIONAL(ENABLE_MANPAGES, [test "$enable_manpages" != "no"])
 AM_CONDITIONAL(ENABLE_NATIVE, [test "$enable_native" != "no"])
 AM_CONDITIONAL(ENABLE_EXTRA_WARNINGS, [test "$enable_extra_warnings" = "yes"])
